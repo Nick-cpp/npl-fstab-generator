@@ -1,0 +1,105 @@
+#!/bin/sh
+
+set -eu
+
+PREFIX="${1:-}"
+
+# Normalize target prefix path if provided
+if [ -n "$PREFIX" ]; then
+    if [ ! -d "$PREFIX" ]; then
+        echo "Error: Directory '$PREFIX' does not exist." >&2
+        exit 1
+    fi
+    PREFIX=$(cd "$PREFIX" && pwd)
+fi
+
+# Header
+cat << 'EOF'
+# <file system>                             <mount point>  <type>  <options>             <dump> <pass>
+EOF
+
+# 1. Parse active mounts from /proc/mounts
+while read -r dev path type opts dump pass; do
+    # Skip pseudo/virtual filesystems
+    case "$type" in
+        sysfs|proc|devtmpfs|devpts|tmpfs|cgroup*|pstore|bpf|tracefs|securityfs|fusectl|configfs|debugfs|mqueue|hugetlbfs|efivarfs|autofs|overlay|rootfs)
+            continue
+            ;;
+    esac
+
+    target_path=""
+
+    if [ -n "$PREFIX" ]; then
+        case "$path" in
+            "$PREFIX"|"$PREFIX"/*)
+                target_path="${path#"$PREFIX"}"
+                [ -z "$target_path" ] && target_path="/"
+                ;;
+            *)
+                continue
+                ;;
+        esac
+    else
+        target_path="$path"
+    fi
+
+    # Resolve UUID via blkid
+    spec="$dev"
+    if [ -b "$dev" ]; then
+        uuid=$(blkid -s UUID -o value "$dev" 2>/dev/null || true)
+        if [ -n "$uuid" ]; then
+            spec="UUID=$uuid"
+        fi
+    fi
+
+    # Set standard dump/pass flags
+    if [ "$target_path" = "/" ]; then
+        dump_val=1
+        pass_val=1
+    elif [ -b "$dev" ]; then
+        dump_val=1
+        pass_val=2
+    else
+        dump_val=0
+        pass_val=0
+    fi
+
+    printf "%-43s %-14s %-7s %-21s %-6d %d\n" "$spec" "$target_path" "$type" "$opts" "$dump_val" "$pass_val"
+
+done < /proc/mounts
+
+# 2. Parse active swap devices/files from /proc/swaps
+if [ -f /proc/swaps ]; then
+    # Skip header line in /proc/swaps
+    tail -n +2 /proc/swaps | while read -r dev type size used priority; do
+        [ -z "$dev" ] && continue
+
+        # Handle swap partition vs swap file
+        if [ -b "$dev" ]; then
+            # Swap partition
+            uuid=$(blkid -s UUID -o value "$dev" 2>/dev/null || true)
+            if [ -n "$uuid" ]; then
+                spec="UUID=$uuid"
+            else
+                spec="$dev"
+            fi
+        else
+            # Swap file
+            if [ -n "$PREFIX" ]; then
+                case "$dev" in
+                    "$PREFIX"/*)
+                        spec="${dev#"$PREFIX"}"
+                        ;;
+                    *)
+                        # Skip swap files outside target prefix
+                        continue
+                        ;;
+                esac
+            else
+                spec="$dev"
+            fi
+        fi
+
+        printf "%-43s %-14s %-7s %-21s %-6d %d\n" "$spec" "none" "swap" "defaults" 0 0
+    done
+fi
