@@ -4,7 +4,6 @@ set -eu
 
 PREFIX="${1:-}"
 
-# Normalize target prefix path if provided
 if [ -n "$PREFIX" ]; then
     if [ ! -d "$PREFIX" ]; then
         echo "Error: Directory '$PREFIX' does not exist." >&2
@@ -13,14 +12,34 @@ if [ -n "$PREFIX" ]; then
     PREFIX=$(cd "$PREFIX" && pwd)
 fi
 
-# Header
+get_uuid() {
+    dev_path="$1"
+    uuid=""
+
+    if [ -d /dev/disk/by-uuid ]; then
+        for link in /dev/disk/by-uuid/*; do
+            if [ -L "$link" ]; then
+                target=$(readlink -f "$link" 2>/dev/null || true)
+                if [ "$target" = "$dev_path" ]; then
+                    uuid="${link##*/}"
+                    break
+                fi
+            fi
+        done
+    fi
+
+    if [ -z "$uuid" ] && command -v blkid >/dev/null 2>&1; then
+        uuid=$(blkid "$dev_path" 2>/dev/null | grep -o 'UUID="[^"]*"' | cut -d'"' -f2)
+    fi
+
+    echo "$uuid"
+}
+
 cat << 'EOF'
 # <file system>                             <mount point>  <type>  <options>             <dump> <pass>
 EOF
 
-# 1. Parse active mounts from /proc/mounts
 while read -r dev path type opts dump pass; do
-    # Skip pseudo/virtual filesystems
     case "$type" in
         sysfs|proc|devtmpfs|devpts|tmpfs|cgroup*|pstore|bpf|tracefs|securityfs|fusectl|configfs|debugfs|mqueue|hugetlbfs|efivarfs|autofs|overlay|rootfs)
             continue
@@ -43,16 +62,14 @@ while read -r dev path type opts dump pass; do
         target_path="$path"
     fi
 
-    # Resolve UUID via blkid
     spec="$dev"
     if [ -b "$dev" ]; then
-        uuid=$(blkid -s UUID -o value "$dev" 2>/dev/null || true)
+        uuid=$(get_uuid "$dev")
         if [ -n "$uuid" ]; then
             spec="UUID=$uuid"
         fi
     fi
 
-    # Set standard dump/pass flags
     if [ "$target_path" = "/" ]; then
         dump_val=1
         pass_val=1
@@ -68,30 +85,24 @@ while read -r dev path type opts dump pass; do
 
 done < /proc/mounts
 
-# 2. Parse active swap devices/files from /proc/swaps
 if [ -f /proc/swaps ]; then
-    # Skip header line in /proc/swaps
     tail -n +2 /proc/swaps | while read -r dev type size used priority; do
         [ -z "$dev" ] && continue
 
-        # Handle swap partition vs swap file
         if [ -b "$dev" ]; then
-            # Swap partition
-            uuid=$(blkid -s UUID -o value "$dev" 2>/dev/null || true)
+            uuid=$(get_uuid "$dev")
             if [ -n "$uuid" ]; then
                 spec="UUID=$uuid"
             else
                 spec="$dev"
             fi
         else
-            # Swap file
             if [ -n "$PREFIX" ]; then
                 case "$dev" in
                     "$PREFIX"/*)
                         spec="${dev#"$PREFIX"}"
                         ;;
                     *)
-                        # Skip swap files outside target prefix
                         continue
                         ;;
                 esac
