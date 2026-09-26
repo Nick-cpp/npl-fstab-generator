@@ -29,14 +29,14 @@ get_uuid() {
     fi
 
     if [ -z "$uuid" ] && command -v blkid >/dev/null 2>&1; then
-        uuid=$(blkid "$dev_path" 2>/dev/null | grep -o 'UUID="[^"]*"' | cut -d'"' -f2)
+        uuid=$(blkid "$dev_path" 2>/dev/null | grep -o ' UUID="[^"]*"' | head -n1 | cut -d'"' -f2)
     fi
 
     echo "$uuid"
 }
 
 cat << 'EOF'
-# <file system>                             <mount point>  <type>  <options>             <dump> <pass>
+# <file system>                             <mount point>  <type>  <options>                                            <dump> <pass>
 EOF
 
 while read -r dev path type opts dump pass; do
@@ -81,7 +81,7 @@ while read -r dev path type opts dump pass; do
         pass_val=0
     fi
 
-    printf "%-43s %-14s %-7s %-21s %-6d %d\n" "$spec" "$target_path" "$type" "$opts" "$dump_val" "$pass_val"
+    printf "%-43s %-14s %-7s %-52s %-6d %d\n" "$spec" "$target_path" "$type" "$opts" "$dump_val" "$pass_val"
 
 done < /proc/mounts
 
@@ -111,6 +111,6 @@ if [ -f /proc/swaps ]; then
             fi
         fi
 
-        printf "%-43s %-14s %-7s %-21s %-6d %d\n" "$spec" "none" "swap" "defaults" 0 0
+        printf "%-43s %-14s %-7s %-52s %-6d %d\n" "$spec" "none" "swap" "defaults" 0 0
     done
 fi
